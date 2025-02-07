@@ -1,0 +1,2 @@
+Total parameters: 134,515,008
+Model size: 256.57 MB
