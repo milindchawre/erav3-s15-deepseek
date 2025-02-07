@@ -247,6 +247,9 @@ class DeepSeek(nn.Module):
             theta=config.get("rope_theta", 10000.0)
         )
         
+        # Enable gradient checkpointing
+        self.gradient_checkpointing = True
+        
         # Initialize weights
         self.apply(lambda p: _init_weights(p, std=config.get("initializer_range", 0.041666666666666664)))
         
@@ -256,9 +259,22 @@ class DeepSeek(nn.Module):
         seq_length = input_ids.shape[1]
         cos, sin = self.rotary_emb(hidden_states, seq_length)
         
-        for layer in self.layers:
-            hidden_states = layer(hidden_states, cos, sin, attention_mask, use_cache)
+        # Apply gradient checkpointing to reduce memory usage
+        if self.gradient_checkpointing and self.training:
+            def create_custom_forward(module):
+                def custom_forward(*inputs):
+                    return module(*inputs)
+                return custom_forward
             
+            for layer in self.layers:
+                hidden_states = torch.utils.checkpoint.checkpoint(
+                    create_custom_forward(layer),
+                    hidden_states, cos, sin, attention_mask, use_cache
+                )
+        else:
+            for layer in self.layers:
+                hidden_states = layer(hidden_states, cos, sin, attention_mask, use_cache)
+        
         hidden_states = self.norm(hidden_states)
         
         # Use tied weights for the output projection

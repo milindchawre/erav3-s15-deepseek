@@ -51,11 +51,13 @@ Required packages:
 ## Training Configuration
 The model is trained with the following specifications:
 - Training steps: 10000 + 100 extended steps
-- Batch size: 8
+- Micro batch size: 4 (with gradient accumulation steps of 2)
+- Effective batch size: 8
 - Sequence length: 2048
 - Learning rate: 0.003 with linear warmup and decay
 - Weight decay: 0.01
 - Gradient clipping: 1.0
+- Gradient checkpointing: Enabled
 - Checkpointing interval: 1000 steps
 - Validation/Generation interval: 500 steps
 - bfloat16 precision (on supported devices)
