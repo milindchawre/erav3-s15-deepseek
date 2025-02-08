@@ -185,14 +185,6 @@ def main():
     # Set random seed
     torch.manual_seed(config["general"]["seed"])
     
-    # Initialize model
-    model = DeepSeek(model_config)  # Update model initialization
-    
-    # Print model parameter count
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"\nTotal parameters: {total_params:,}")
-    print(f"Model size: {total_params * 2 / (1024 * 1024):.2f} MB\n")
-    
     # Initialize mixed precision training
     use_amp = device_name != "cpu"
     dtype = torch.float32
@@ -209,11 +201,52 @@ def main():
         scaler = None
         print("Using full precision (float32)")
     
-    # Move model to device and set dtype
+    # Initialize model and move to device
+    model = DeepSeek(model_config)
     model = model.to(device)
     if dtype != torch.float32:
         model = model.to(dtype)
     
+    # Initialize optimizer
+    use_fused = config["optimizer"]["optimizer_factory"]["torch_adam_is_fused"]
+    optimizer = torch.optim.AdamW(
+        model.parameters(),
+        lr=config["optimizer"]["learning_rate_scheduler"]["learning_rate"],
+        betas=(
+            config["optimizer"]["optimizer_factory"]["adam_beta1"],
+            config["optimizer"]["optimizer_factory"]["adam_beta2"]
+        ),
+        eps=config["optimizer"]["optimizer_factory"]["adam_eps"],
+        weight_decay=config["optimizer"]["weight_decay"],
+        fused=use_fused
+    )
+    
+    # Initialize scheduler
+    scheduler = get_lr_scheduler(optimizer, config)
+    
+    # Initialize step counter
+    step = 1
+    
+    # Try to load checkpoint if exists
+    checkpoint_files = glob.glob(os.path.join(config['checkpoints']['checkpoints_path'], 'step_*.pt'))
+    if checkpoint_files:
+        checkpoint_files.sort(key=lambda x: int(re.search(r'step_(\d+)', x).group(1)))
+        latest_checkpoint = checkpoint_files[-1]
+        print(f"\nFound checkpoint: {latest_checkpoint}")
+        checkpoint = load_checkpoint(latest_checkpoint)
+        
+        if checkpoint is not None:
+            try:
+                model.load_state_dict(checkpoint['model_state_dict'])
+                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                step = checkpoint['step'] + 1  # Start from next step
+                print(f"Successfully resumed from step {step-1}")
+            except Exception as e:
+                print(f"Warning: Failed to restore checkpoint state: {str(e)}")
+                print("Starting training from scratch...")
+                step = 1
+
     # Initialize tokenizer with padding token
     tokenizer = AutoTokenizer.from_pretrained(config["tokenizer"]["tokenizer_name_or_path"])
     
@@ -243,44 +276,12 @@ def main():
             padding="max_length",
             return_tensors="pt"
         )
-        
-        # Stack the tensors properly
         return {
-            "input_ids": tokenized["input_ids"].squeeze(0),  # Remove batch dimension
-            "attention_mask": tokenized["attention_mask"].squeeze(0)  # Remove batch dimension
+            "input_ids": tokenized["input_ids"].squeeze(0),
+            "attention_mask": tokenized["attention_mask"].squeeze(0)
         }
-    
-    # Initialize step counter and total steps
-    initial_total_steps = config["tokens"]["train_steps"]  # 10000
-    extended_steps = 100  # Updated from 50
-    final_total_steps = initial_total_steps + extended_steps
-    step = 1  # Initialize step to 1
-    
-    # Try to find latest checkpoint
-    checkpoint_files = glob.glob(os.path.join(config['checkpoints']['checkpoints_path'], 'step_*.pt'))
-    latest_checkpoint = None
-    
-    if checkpoint_files:
-        # Sort checkpoints by step number
-        checkpoint_files.sort(key=lambda x: int(re.search(r'step_(\d+)', x).group(1)))
-        latest_checkpoint = checkpoint_files[-1]
-        
-        print(f"\nFound checkpoint: {latest_checkpoint}")
-        checkpoint = load_checkpoint(latest_checkpoint)
-        
-        if checkpoint is not None:
-            try:
-                model.load_state_dict(checkpoint['model_state_dict'])
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-                step = checkpoint['step']  # Use loaded step directly
-                print(f"Resumed from step {step}")
-            except Exception as e:
-                print(f"Warning: Failed to restore checkpoint state: {str(e)}")
-                print("Starting training from scratch at step 1...")
-                step = 1  # Reset to 1 if checkpoint loading fails
-    
-    # Initialize dataset iterator
+
+    # Initialize dataset and iterator
     train_iter = iter(train_dataset.map(
         tokenize_function,
         remove_columns=train_dataset.column_names,
@@ -290,8 +291,9 @@ def main():
     
     # Skip batches if resuming from checkpoint
     if step > 1:
-        print(f"Skipping {step * config['tokens']['batch_accumulation_per_replica']} batches to resume position...")
-        for _ in range(step * config["tokens"]["batch_accumulation_per_replica"]):
+        batches_to_skip = (step - 1) * config['tokens']['batch_accumulation_per_replica']
+        print(f"Skipping {batches_to_skip} batches to resume position...")
+        for _ in range(batches_to_skip):
             try:
                 next(train_iter)
             except StopIteration:
@@ -303,30 +305,16 @@ def main():
                 ))
                 next(train_iter)
         print("Done skipping batches")
-    
-    # Initialize optimizer
-    use_fused = config["optimizer"]["optimizer_factory"]["torch_adam_is_fused"]
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=config["optimizer"]["learning_rate_scheduler"]["learning_rate"],
-        betas=(
-            config["optimizer"]["optimizer_factory"]["adam_beta1"],
-            config["optimizer"]["optimizer_factory"]["adam_beta2"]
-        ),
-        eps=config["optimizer"]["optimizer_factory"]["adam_eps"],
-        weight_decay=config["optimizer"]["weight_decay"],
-        fused=use_fused
-    )
-    
-    # Initialize scheduler
-    scheduler = get_lr_scheduler(optimizer, config)
-    
+
     # Training parameters
     batch_size = config["tokens"]["micro_batch_size"]
     accum_steps = config["tokens"]["batch_accumulation_per_replica"]
     save_steps = 1000
     eval_steps = 500
     grad_clip = 1.0
+    initial_total_steps = config["tokens"]["train_steps"]
+    extended_steps = 100  # Additional steps beyond initial total
+    final_total_steps = initial_total_steps + extended_steps
     
     print("\nStarting training...")
     print(f"Total steps: {final_total_steps}")
