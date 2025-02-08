@@ -169,7 +169,7 @@ def main():
             "batch_accumulation_per_replica": 2,
             "limit_test_batches": 0,
             "limit_val_batches": 0,
-            "micro_batch_size": 4,
+            "micro_batch_size": 5120,
             "sequence_length": 2048,
             "train_steps": 10000,
             "val_check_interval": 500,

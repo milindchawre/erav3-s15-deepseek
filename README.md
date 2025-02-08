@@ -50,18 +50,17 @@ Required packages:
 
 ## Training Configuration
 The model is trained with the following specifications:
-- Training steps: 10000 + 100 extended steps
-- Micro batch size: 4 (with gradient accumulation steps of 2)
-- Effective batch size: 8
+- Training steps: 10,000 + 100 extended steps
+- Micro batch size: 5120
+- Batch accumulation steps: 2
 - Sequence length: 2048
-- Learning rate: 0.003 with linear warmup and decay
+- Learning rate: 0.003 with linear warmup (2000 steps) and decay
 - Weight decay: 0.01
 - Gradient clipping: 1.0
-- Gradient checkpointing: Enabled
-- Checkpointing interval: 1000 steps
-- Validation/Generation interval: 500 steps
-- bfloat16 precision (on supported devices)
-- AdamW optimizer with β1=0.9, β2=0.95
+- Checkpointing interval: 500 steps
+- Text generation interval: 500 steps
+- Mixed precision: bfloat16 (on supported devices)
+- AdamW optimizer with β1=0.9, β2=0.95, ε=1e-8
 
 ## Features
 
@@ -81,14 +80,20 @@ During training, the model processes batches of data, computes the loss, and upd
 
 ## Training Log File
 
-The training log file is generated during the training process and contains detailed information about each training step. It includes metrics such as:
-- Step number
-- Loss value
-- Learning rate
-- Total step time
+The training script generates detailed logs during the training process, including:
+- Step number and total steps (10,100)
+- Loss value for each step
+- Current learning rate
+- Step time in milliseconds
 - Tokens processed per second
+- Accumulated batch information
 
-You can find the [training log file](./training.logs) in the project directory after running the training script.
+Example log output:
+```plaintext
+Step 1000/10100 | Loss: 0.3361 | LR: 0.003000 | Total Step Time: 2460.89ms | Tokens/sec: 4260.88 (accumulated over 4 batches)
+```
+
+You can find the [training log file](./training_logs.txt) in the project directory after running the training script.
 
 ## Potential Improvements
 
@@ -225,7 +230,7 @@ streaming=True
 
 - Training metrics logged every step:
   ```
-  Step 1000 | Loss: 3.4567 | LR: 0.002345 | Total Step Time: 524.56ms | Tokens/sec: 31234.56 (accumulated over 8 batches)
+ Step 1000/10100 | Loss: 0.3361 | LR: 0.003000 | Total Step Time: 2460.89ms | Tokens/sec: 4260964.88 (accumulated over 5120 batches)
   ```
 
 ### Training Progress Tracking
